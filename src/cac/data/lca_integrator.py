@@ -81,20 +81,36 @@ class LCAIntegrator:
         self,
         products: pd.DataFrame,
         poore_nemecek: pd.DataFrame,
-        open_food_facts: Optional[pd.DataFrame] = None
+        open_food_facts: Optional[pd.DataFrame] = None,
+        su_eatable_life: Optional[pd.DataFrame] = None
     ) -> Dict[str, Dict]:
         """
-        Merge footprint data from multiple sources
+        Merge footprint data from multiple sources with priority order
+        
+        Priority: Open Food Facts > Poore & Nemecek > SU-EATABLE LIFE > Default
         
         Returns:
             Dict mapping product_id to footprint data
         """
+        from .product_mapper import ProductMapper
+        
         footprint_db = {}
         
-        # Build category mapping
-        self.build_category_mapping(products, poore_nemecek)
+        # Initialize product mapper with LLM support
+        mapper = ProductMapper(use_llm=True)
         
-        # Create category -> footprint lookup
+        # Build category mapping using enhanced mapper
+        self.category_mapping = {}
+        for _, product in products.iterrows():
+            product_id = str(product["product_id"])
+            product_name = product["product_name"]
+            
+            category = mapper.map_product_to_category(product_name, product_id)
+            self.category_mapping[product_id] = category
+        
+        print(f"✅ Mapped {len(self.category_mapping)} products to categories")
+        
+        # Create category -> footprint lookup from Poore & Nemecek
         category_footprints = {}
         for _, row in poore_nemecek.iterrows():
             category_footprints[row["category"]] = {
@@ -103,21 +119,66 @@ class LCAIntegrator:
                 "source": "Poore & Nemecek 2018",
             }
         
-        # Map products to footprints
-        for product_id, category in self.category_mapping.items():
-            if category in category_footprints:
-                footprint_db[product_id] = {
-                    **category_footprints[category],
-                    "category": category,
+        # Create SU-EATABLE LIFE lookup if available
+        suel_footprints = {}
+        if su_eatable_life is not None:
+            for _, row in su_eatable_life.iterrows():
+                suel_footprints[row["food_item"]] = {
+                    "emissions_mean": row["carbon_footprint_kg"],
+                    "emissions_variance": (row["carbon_footprint_kg"] * 0.3) ** 2,  # Assume 30% uncertainty
+                    "source": "SU-EATABLE LIFE",
                 }
-            else:
-                # Default fallback
-                footprint_db[product_id] = {
+        
+        # Map products to footprints with priority
+        for product_id, category in self.category_mapping.items():
+            product_name = products[products["product_id"] == int(product_id)]["product_name"].iloc[0] if len(products[products["product_id"] == int(product_id)]) > 0 else ""
+            
+            footprint = None
+            
+            # Priority 1: Open Food Facts (product-specific)
+            if open_food_facts is not None:
+                off_match = open_food_facts[open_food_facts["product_name"].str.contains(product_name, case=False, na=False)]
+                if len(off_match) > 0:
+                    off_row = off_match.iloc[0]
+                    footprint = {
+                        "emissions_mean": off_row.get("carbon_footprint_100g", 2.0) * 10,  # Convert to per kg
+                        "emissions_variance": (off_row.get("carbon_footprint_100g", 2.0) * 10 * 0.2) ** 2,
+                        "source": "Open Food Facts",
+                        "ecoscore": off_row.get("ecoscore_score", 50),
+                    }
+            
+            # Priority 2: Poore & Nemecek (category-based)
+            if footprint is None and category in category_footprints:
+                footprint = category_footprints[category]
+            
+            # Priority 3: SU-EATABLE LIFE (fuzzy match)
+            if footprint is None and suel_footprints:
+                for suel_item, suel_data in suel_footprints.items():
+                    if any(word in product_name.lower() for word in suel_item.lower().split()):
+                        footprint = suel_data
+                        break
+            
+            # Priority 4: Default fallback
+            if footprint is None:
+                footprint = {
                     "emissions_mean": 2.0,
                     "emissions_variance": 1.0,
-                    "category": "Other",
                     "source": "Default",
                 }
+            
+            # Add category info
+            footprint["category"] = category
+            footprint_db[product_id] = footprint
+        
+        # Print source statistics
+        sources = {}
+        for fp in footprint_db.values():
+            source = fp["source"]
+            sources[source] = sources.get(source, 0) + 1
+        
+        print(f"✅ Footprint sources:")
+        for source, count in sources.items():
+            print(f"   {source}: {count} products")
         
         self.footprint_db = footprint_db
         return footprint_db

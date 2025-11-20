@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Process and integrate LCA datasets"""
+"""Process and integrate all LCA datasets"""
 
 import sys
 from pathlib import Path
@@ -13,9 +13,9 @@ from cac.data.lca_integrator import LCAIntegrator
 def main():
     """Process raw data and create integrated footprint database"""
     
-    print("="*60)
-    print("Carbon-Aware Checkout - Data Processing Pipeline")
-    print("="*60)
+    print("="*70)
+    print("Carbon-Aware Checkout - Complete Data Processing Pipeline")
+    print("="*70)
     
     # Initialize
     loader = DataLoader(data_dir="data/raw")
@@ -23,51 +23,101 @@ def main():
     
     # Load Instacart dataset
     print("\n1. Loading Instacart dataset...")
-    try:
-        datasets = loader.load_instacart_dataset()
-        print(f"   ✓ Loaded {len(datasets['products'])} products")
-        print(f"   ✓ Loaded {len(datasets['orders'])} orders")
-    except FileNotFoundError as e:
-        print(f"   ✗ Error: {e}")
-        print("   Please download Instacart dataset to data/raw/")
-        return
+    datasets = loader.load_instacart_dataset()
+    print(f"   ✓ Products: {len(datasets['products'])}")
+    print(f"   ✓ Orders: {len(datasets['orders'])}")
     
-    # Load LCA data
+    # Load LCA databases
     print("\n2. Loading LCA databases...")
     poore_nemecek = loader.load_poore_nemecek_data()
-    print(f"   ✓ Loaded {len(poore_nemecek)} LCA categories")
+    open_food_facts = loader.load_open_food_facts()
+    su_eatable_life = loader.load_su_eatable_life()
     
-    # Integrate footprints
-    print("\n3. Integrating product footprints...")
+    print(f"   ✓ Poore & Nemecek: {len(poore_nemecek)} categories")
+    print(f"   ✓ Open Food Facts: {len(open_food_facts)} products")
+    print(f"   ✓ SU-EATABLE LIFE: {len(su_eatable_life)} items")
+    
+    # Integrate all footprints
+    print("\n3. Integrating product footprints with multi-source priority...")
     footprint_db = integrator.merge_footprints(
         datasets['products'],
-        poore_nemecek
+        poore_nemecek,
+        open_food_facts,
+        su_eatable_life
     )
-    print(f"   ✓ Mapped {len(footprint_db)} products to footprints")
     
     # Save processed data
-    print("\n4. Saving processed database...")
+    print("\n4. Saving processed databases...")
     output_dir = Path("data/processed")
     output_dir.mkdir(exist_ok=True)
     
+    # Save footprint database
     import pickle
     with open(output_dir / "footprint_db.pkl", "wb") as f:
         pickle.dump(footprint_db, f)
+    print(f"   ✓ Footprint DB: {output_dir / 'footprint_db.pkl'}")
     
-    print(f"   ✓ Saved to {output_dir / 'footprint_db.pkl'}")
+    # Save category mapping
+    with open(output_dir / "category_mapping.pkl", "wb") as f:
+        pickle.dump(integrator.category_mapping, f)
+    print(f"   ✓ Category mapping: {output_dir / 'category_mapping.pkl'}")
+    
+    # Save individual datasets
+    poore_nemecek.to_csv(output_dir / "poore_nemecek_processed.csv", index=False)
+    open_food_facts.to_csv(output_dir / "open_food_facts_processed.csv", index=False)
+    su_eatable_life.to_csv(output_dir / "su_eatable_life_processed.csv", index=False)
+    
+    print(f"   ✓ Individual datasets saved to {output_dir}/")
+    
+    # Generate sample baskets
+    print("\n5. Generating sample baskets...")
+    sample_baskets = loader.sample_baskets(n_baskets=1000)
+    
+    with open(output_dir / "sample_baskets.pkl", "wb") as f:
+        pickle.dump(sample_baskets, f)
+    print(f"   ✓ Sample baskets: {len(sample_baskets)} baskets")
     
     # Summary statistics
-    print("\n" + "="*60)
-    print("SUMMARY")
-    print("="*60)
+    print("\n" + "="*70)
+    print("PROCESSING SUMMARY")
+    print("="*70)
     
     emissions = [fp["emissions_mean"] for fp in footprint_db.values()]
-    print(f"Products mapped: {len(footprint_db)}")
+    sources = {}
+    categories = {}
+    
+    for fp in footprint_db.values():
+        source = fp["source"]
+        category = fp["category"]
+        sources[source] = sources.get(source, 0) + 1
+        categories[category] = categories.get(category, 0) + 1
+    
+    print(f"\nProducts processed: {len(footprint_db)}")
     print(f"Mean emissions: {sum(emissions)/len(emissions):.2f} kg CO2e/kg")
     print(f"Min emissions: {min(emissions):.2f} kg CO2e/kg")
     print(f"Max emissions: {max(emissions):.2f} kg CO2e/kg")
     
-    print("\n✅ Data processing complete!")
+    print(f"\nData sources:")
+    for source, count in sorted(sources.items()):
+        print(f"  {source}: {count} products ({count/len(footprint_db)*100:.1f}%)")
+    
+    print(f"\nTop categories:")
+    for category, count in sorted(categories.items(), key=lambda x: x[1], reverse=True)[:10]:
+        print(f"  {category}: {count} products")
+    
+    print(f"\nFiles created:")
+    print(f"  - {output_dir / 'footprint_db.pkl'}")
+    print(f"  - {output_dir / 'category_mapping.pkl'}")
+    print(f"  - {output_dir / 'sample_baskets.pkl'}")
+    print(f"  - {output_dir / 'poore_nemecek_processed.csv'}")
+    print(f"  - {output_dir / 'open_food_facts_processed.csv'}")
+    print(f"  - {output_dir / 'su_eatable_life_processed.csv'}")
+    
+    print("\n✅ Complete data processing pipeline finished!")
+    print("\nNext steps:")
+    print("  1. Run: python3 scripts/test_all_gaps_fixed.py")
+    print("  2. Run: python3 scripts/validate_paper_claims.py")
+    print("  3. Start API: uvicorn cac.api.checkout_api:app --reload")
 
 
 if __name__ == "__main__":
