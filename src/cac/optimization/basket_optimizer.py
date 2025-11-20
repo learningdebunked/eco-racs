@@ -110,15 +110,25 @@ class BasketOptimizer:
                         score = self._compute_objective(new_basket, basket)
                         new_beam.append({"basket": new_basket, "score": score})
                 
-                # Keep original as well
-                new_beam.append(candidate_basket_state)
+                # CRITICAL FIX: Only keep original if it's competitive
+                # Don't always add it - let beam search decide
+                if len(substitutes) == 0:
+                    # No substitutes found, keep original
+                    new_beam.append(candidate_basket_state)
             
             # Keep top-K
-            new_beam.sort(key=lambda x: x["score"])
-            beam = new_beam[:self.beam_width]
+            if new_beam:
+                new_beam.sort(key=lambda x: x["score"])
+                beam = new_beam[:self.beam_width]
+            else:
+                # No valid candidates, keep current beam
+                pass
         
-        # Best basket
-        optimized = beam[0]["basket"]
+        # Best basket (fallback to original if beam is empty)
+        if not beam:
+            optimized = basket
+        else:
+            optimized = beam[0]["basket"]
         
         # Compute metrics
         original_emissions = sum(p.get("emissions", 0) for p in basket)
@@ -194,12 +204,28 @@ class BasketOptimizer:
         product_idx: int,
         swap: SwapCandidate
     ) -> List[Dict]:
-        """Apply a swap to create new basket"""
-        new_basket = basket.copy()
-        new_basket[product_idx] = {
-            **new_basket[product_idx],
-            "product_id": swap.substitute_product_id,
-        }
+        """Apply a swap to create new basket with full substitute data"""
+        # CRITICAL FIX: Deep copy and get full substitute info
+        new_basket = [item.copy() for item in basket]
+        
+        # Get full substitute product information
+        sub_product = self._substitute_engine.get_product_info(swap.substitute_product_id)
+        
+        if sub_product:
+            # Replace with complete substitute data
+            original_quantity = new_basket[product_idx].get("quantity", 1.0)
+            new_basket[product_idx] = {
+                "product_id": swap.substitute_product_id,
+                "name": sub_product["name"],
+                "quantity": original_quantity,
+                "price": sub_product["price"],
+                "emissions": sub_product["emissions"],
+                "category": sub_product["category"],
+                "health_score": sub_product.get("health", 0.5),
+                "vegetarian": sub_product.get("vegetarian", False),
+                "allergens": sub_product.get("allergens", []),
+            }
+        
         return new_basket
     
     def _satisfies_constraints(
@@ -209,14 +235,36 @@ class BasketOptimizer:
         constraints: Dict
     ) -> bool:
         """Check if basket satisfies all constraints"""
-        # Price constraint
-        original_cost = sum(p["price"] * p["quantity"] for p in original_basket)
-        new_cost = sum(p["price"] * p["quantity"] for p in new_basket)
+        # Price constraint (basket-level)
+        original_cost = sum(p.get("price", 0) * p.get("quantity", 1) for p in original_basket)
+        new_cost = sum(p.get("price", 0) * p.get("quantity", 1) for p in new_basket)
         
-        max_delta = constraints.get("max_price_delta", self.max_price_delta)
-        if abs(new_cost - original_cost) / original_cost > max_delta:
-            return False
+        # CRITICAL FIX: Avoid division by zero
+        if original_cost > 0:
+            max_delta = constraints.get("max_price_delta", self.max_price_delta)
+            cost_change_ratio = abs(new_cost - original_cost) / original_cost
+            if cost_change_ratio > max_delta:
+                return False
         
-        # TODO: Check dietary, allergen constraints
+        # Dietary constraints
+        if constraints.get("vegetarian"):
+            for item in new_basket:
+                if not item.get("vegetarian", True):
+                    return False
+        
+        if constraints.get("vegan"):
+            for item in new_basket:
+                if not item.get("vegetarian", True):
+                    return False
+                if "dairy" in item.get("allergens", []):
+                    return False
+        
+        # Allergen constraints
+        excluded_allergens = constraints.get("allergens", [])
+        if excluded_allergens:
+            for item in new_basket:
+                item_allergens = item.get("allergens", [])
+                if any(a in item_allergens for a in excluded_allergens):
+                    return False
         
         return True
