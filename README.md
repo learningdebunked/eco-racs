@@ -16,6 +16,8 @@ CAC is a **complete, production-ready implementation** of the research paper "Ca
 
 **Status**: ✅ All 21 mathematical formulas implemented | ✅ All 6 novel metrics working | ✅ Optimization achieving 30.5% emissions reduction
 
+> 📦 **Want real data?** Download the Instacart dataset (3.1M orders, 50k products) → [GET_REAL_DATA.md](GET_REAL_DATA.md)
+
 ## ✨ Key Features
 
 - 🌍 **Real-time basket-level carbon scoring** with uncertainty quantification (RACS)
