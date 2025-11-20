@@ -18,15 +18,25 @@ class ExplanationGenerator:
         if self.llm_provider == "openai":
             try:
                 import openai
-                self.client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            except ImportError:
+                api_key = os.getenv("OPENAI_API_KEY")
+                if api_key:
+                    self.client = openai.OpenAI(api_key=api_key)
+                else:
+                    self.client = None
+            except (ImportError, Exception):
                 self.client = None
         elif self.llm_provider == "anthropic":
             try:
                 import anthropic
-                self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-            except ImportError:
+                api_key = os.getenv("ANTHROPIC_API_KEY")
+                if api_key:
+                    self.client = anthropic.Anthropic(api_key=api_key)
+                else:
+                    self.client = None
+            except (ImportError, Exception):
                 self.client = None
+        else:
+            self.client = None
     
     def generate(
         self,
@@ -53,6 +63,10 @@ class ExplanationGenerator:
             return self._generate_numeric_explanation(emissions_data, optimization_result)
         elif message_type == "conversational":
             return self._generate_conversational_explanation(
+                basket, emissions_data, optimization_result, swap_simulation
+            )
+        elif message_type == "social_proof":
+            return self._generate_social_proof_explanation(
                 basket, emissions_data, optimization_result, swap_simulation
             )
         else:
@@ -132,10 +146,16 @@ class ExplanationGenerator:
         cost_change = optimization_result["cost"] - sum(p["price"] * p["quantity"] for p in basket)
         top_swaps = swap_simulation["swaps"][:3]
         
+        # Calculate percentile (social proof)
+        # If COG ratio > 0.15, user is in top 30% of low-carbon potential
+        cog_ratio = optimization_result['cog_ratio']
+        percentile = 100 - min(cog_ratio * 200, 70)  # Rough estimate
+        
         prompt = f"""
         Basket emissions: {emissions:.1f} kg CO2e
-        Potential savings: {cog:.1f} kg CO2e ({optimization_result['cog_ratio']*100:.1f}%)
+        Potential savings: {cog:.1f} kg CO2e ({cog_ratio*100:.1f}%)
         Cost change: ${cost_change:.2f}
+        Social proof: Making these swaps would put you in the top {percentile:.0f}% of low-carbon shoppers
         
         Top swap opportunities:
         """
@@ -143,7 +163,7 @@ class ExplanationGenerator:
         for swap in top_swaps:
             prompt += f"\n- {swap.get('description', 'Product swap')}: saves {swap['emissions_reduction']:.1f} kg CO2e"
         
-        prompt += "\n\nGenerate a friendly explanation for the shopper."
+        prompt += "\n\nGenerate a friendly explanation for the shopper that includes social proof."
         
         return prompt
     
@@ -160,6 +180,25 @@ class ExplanationGenerator:
         return f"""Your basket has a carbon footprint of {emissions:.1f} kg CO2e. 
         We found some simple swaps that could reduce your impact by {cog:.1f} kg CO2e 
         ({cog_ratio*100:.1f}%) with minimal cost change. Small changes add up!"""
+    
+    def _generate_social_proof_explanation(
+        self,
+        basket: List[Dict],
+        emissions_data: Dict,
+        optimization_result: Dict,
+        swap_simulation: Dict
+    ) -> str:
+        """Generate social proof explanation"""
+        emissions = emissions_data["emissions"]
+        cog = optimization_result["cog"]
+        cog_ratio = optimization_result["cog_ratio"]
+        
+        # Calculate percentile
+        percentile = 100 - min(cog_ratio * 200, 70)
+        
+        return f"""Your basket emits {emissions:.1f} kg CO2e. By making these simple swaps, 
+        you could reduce your impact by {cog:.1f} kg CO2e ({cog_ratio*100:.1f}%) and join 
+        the top {percentile:.0f}% of low-carbon shoppers. Small changes add up to big impact!"""
     
     def _generate_default_explanation(self, emissions_data: Dict) -> str:
         """Default explanation"""

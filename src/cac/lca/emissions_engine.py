@@ -21,15 +21,53 @@ class EmissionsEngine:
     def __init__(self, config: Dict):
         self.config = config
         self.footprint_db = {}  # Will be loaded from LCA databases
+        self.load_lca_databases()  # Auto-load on initialization
         
     def load_lca_databases(self):
         """Load and integrate LCA databases (Poore & Nemecek, Open Food Facts, etc.)"""
-        # TODO: Implement database loading
-        pass
+        from ..data.data_loader import DataLoader
+        from ..data.lca_integrator import LCAIntegrator
+        
+        # Load LCA data
+        loader = DataLoader()
+        poore_nemecek = loader.load_poore_nemecek_data()
+        
+        # Create footprint database
+        integrator = LCAIntegrator()
+        
+        # For now, create direct category mapping
+        for _, row in poore_nemecek.iterrows():
+            category = row["category"]
+            self.footprint_db[category] = ProductFootprint(
+                product_id=category,
+                emissions_mean=row["emissions_mean"],
+                emissions_variance=row["emissions_std"] ** 2,
+                category=category,
+                source="Poore & Nemecek 2018"
+            )
+        
+        print(f"✅ Loaded {len(self.footprint_db)} LCA categories")
     
     def get_product_footprint(self, product_id: str) -> Optional[ProductFootprint]:
         """Retrieve product footprint from database"""
-        return self.footprint_db.get(product_id)
+        # Try direct lookup
+        if product_id in self.footprint_db:
+            return self.footprint_db[product_id]
+        
+        # Try category-based lookup
+        # Extract category from product_id or use mapping
+        for category in self.footprint_db:
+            if category.lower() in product_id.lower():
+                return self.footprint_db[category]
+        
+        # Fallback: return default
+        return ProductFootprint(
+            product_id=product_id,
+            emissions_mean=5.0,  # Default moderate emissions
+            emissions_variance=2.0,
+            category="Unknown",
+            source="Default"
+        )
     
     def calculate_basket_emissions(
         self,

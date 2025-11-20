@@ -16,6 +16,22 @@ class AcceptanceModel:
     
     def _load_model(self):
         """Load pre-trained acceptance model"""
+        model_path = self.config.get("model_path", "models/acceptance_model.pkl")
+        
+        # Try to load trained model
+        try:
+            import pickle
+            from pathlib import Path
+            
+            if Path(model_path).exists():
+                with open(model_path, 'rb') as f:
+                    self.model = pickle.load(f)
+                print(f"✅ Loaded trained model from {model_path}")
+                return
+        except Exception as e:
+            print(f"⚠️  Could not load model from {model_path}: {e}")
+        
+        # Fallback to untrained model
         model_type = self.config.get("acceptance_model_type", "logistic")
         
         if model_type == "logistic":
@@ -23,7 +39,7 @@ class AcceptanceModel:
         elif model_type == "gbm":
             self.model = GradientBoostingClassifier()
         
-        # TODO: Load trained weights
+        print(f"⚠️  Using untrained {model_type} model (heuristic fallback)")
     
     def predict_acceptance(
         self,

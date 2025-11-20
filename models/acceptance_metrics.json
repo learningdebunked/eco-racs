@@ -1,0 +1,14 @@
+{
+  "auc": 0.6912364130434783,
+  "cv_mean": 0.6311099814123796,
+  "cv_std": 0.03563079287680238,
+  "feature_names": [
+    "price_change",
+    "emissions_reduction",
+    "similarity_score",
+    "brand_change",
+    "prior_acceptance",
+    "sustainability_score",
+    "message_type"
+  ]
+}

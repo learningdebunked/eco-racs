@@ -144,9 +144,24 @@ class MCPOrchestrator:
         
         self.audit_log.append(event)
         
-        # TODO: Persist to database
+        # Persist to file
+        self._persist_audit_log()
         
         return {"status": "logged", "event_id": len(self.audit_log)}
+    
+    def _persist_audit_log(self):
+        """Persist audit log to file for compliance"""
+        from pathlib import Path
+        
+        log_path = self.config.get("audit_log_path", "logs/audit.jsonl")
+        log_file = Path(log_path)
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Append latest entry to JSONL file
+        if self.audit_log:
+            latest_entry = self.audit_log[-1]
+            with open(log_file, 'a') as f:
+                f.write(json.dumps(latest_entry) + '\n')
     
     def _log_tool_call(self, tool_name: str, params: Dict, result: Any):
         """Log tool call for audit trail"""

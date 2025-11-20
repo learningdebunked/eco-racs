@@ -39,8 +39,37 @@ class BasketOptimizer:
         Returns:
             List of SwapCandidate objects
         """
-        # TODO: Implement substitute search with constraints
-        return []
+        from ..substitutes.substitute_engine import SubstituteEngine
+        
+        # Initialize substitute engine
+        if not hasattr(self, '_substitute_engine'):
+            self._substitute_engine = SubstituteEngine(self.config)
+        
+        # Find substitutes
+        substitutes = self._substitute_engine.find_substitutes(
+            product_id,
+            constraints,
+            max_results=10
+        )
+        
+        # Convert to SwapCandidate objects
+        swap_candidates = []
+        original = self._substitute_engine.get_product_info(product_id)
+        
+        if not original:
+            return []
+        
+        for sub in substitutes:
+            swap_candidates.append(SwapCandidate(
+                original_product_id=product_id,
+                substitute_product_id=sub.product_id,
+                emissions_reduction=original["emissions"] - sub.emissions,
+                cost_change=sub.price - original["price"],
+                similarity_score=sub.similarity_score,
+                category=sub.category
+            ))
+        
+        return swap_candidates
     
     def optimize_basket(
         self,
@@ -60,7 +89,7 @@ class BasketOptimizer:
         constraints = constraints or {}
         
         # Initialize beam with original basket
-        beam = [{"basket": basket, "score": self._compute_objective(basket)}]
+        beam = [{"basket": basket, "score": self._compute_objective(basket, basket)}]
         
         # Beam search over products
         for product_idx, item in enumerate(basket):
@@ -78,7 +107,7 @@ class BasketOptimizer:
                     
                     # Check constraints
                     if self._satisfies_constraints(new_basket, basket, constraints):
-                        score = self._compute_objective(new_basket)
+                        score = self._compute_objective(new_basket, basket)
                         new_beam.append({"basket": new_basket, "score": score})
                 
                 # Keep original as well
@@ -116,7 +145,7 @@ class BasketOptimizer:
             "mac_basket": mac_basket,
         }
     
-    def _compute_objective(self, basket: List[Dict]) -> float:
+    def _compute_objective(self, basket: List[Dict], original_basket: Optional[List[Dict]] = None) -> float:
         """
         Compute multi-objective score J(B')
         
@@ -129,10 +158,35 @@ class BasketOptimizer:
         
         emissions = sum(p.get("emissions", 0) for p in basket)
         cost = sum(p["price"] * p["quantity"] for p in basket)
-        dissimilarity = 0.0  # TODO: Compute embedding distance
-        health = sum(p.get("health_score", 0.5) for p in basket) / len(basket)
+        health = sum(p.get("health_score", 0.5) for p in basket) / len(basket) if basket else 0.5
+        
+        # Compute dissimilarity if original basket provided
+        dissimilarity = 0.0
+        if original_basket and hasattr(self, '_substitute_engine'):
+            dissimilarity = self._compute_basket_dissimilarity(basket, original_basket)
         
         return alpha * emissions + beta * cost + gamma * dissimilarity + delta * (1 - health)
+    
+    def _compute_basket_dissimilarity(self, basket1: List[Dict], basket2: List[Dict]) -> float:
+        """Compute dissimilarity between two baskets"""
+        if len(basket1) != len(basket2):
+            return 1.0  # Maximum dissimilarity
+        
+        total_dissimilarity = 0.0
+        for item1, item2 in zip(basket1, basket2):
+            if item1["product_id"] == item2["product_id"]:
+                continue  # Same product, no dissimilarity
+            
+            # Compute product-level dissimilarity
+            similarity = self._substitute_engine._compute_similarity(
+                item1["product_id"],
+                item2["product_id"]
+            )
+            dissimilarity = 1.0 - similarity
+            total_dissimilarity += dissimilarity
+        
+        # Normalize by basket size
+        return total_dissimilarity / len(basket1) if basket1 else 0.0
     
     def _apply_swap(
         self,
